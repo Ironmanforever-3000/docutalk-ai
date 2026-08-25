@@ -1,0 +1,2 @@
+ALTER TABLE documents
+  ADD COLUMN IF NOT EXISTS pca_model JSONB;

@@ -1,0 +1,547 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+import { computeChunkCoordinates } from "./pcaProjection.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Client-Info, Apikey",
+};
+
+const VOYAGE_API_KEY = Deno.env.get("VOYAGE_API_KEY");
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+
+// The document_chunks.embedding column is VECTOR(1536). Voyage-3 returns
+// 1024-dim vectors, so pad to 1536 (cosine similarity is unaffected by
+// zero-padding) to keep a single storage format.
+const EMBEDDING_DIM = 1536;
+
+function padEmbedding(emb: number[]): number[] {
+  if (emb.length === EMBEDDING_DIM) return emb;
+  if (emb.length > EMBEDDING_DIM) return emb.slice(0, EMBEDDING_DIM);
+  return [...emb, ...new Array(EMBEDDING_DIM - emb.length).fill(0)];
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// ── Chunking ───────────────────────────────────────────────────────────────────
+
+const TARGET_TOKENS = 600;
+const MAX_CHARS = TARGET_TOKENS * 4;
+const OVERLAP_PARAS = 1;
+
+function chunkText(text: string): string[] {
+  // Normalize line endings (files extracted with \r-only or \r\n) so CSV/TSV
+  // rows and CR-delimited text split into separate paragraphs.
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const paragraphs = normalized.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+
+  const chunks: string[] = [];
+  let currentChunk: string[] = [];
+  let currentLength = 0;
+
+  const pushChunk = () => {
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk.join("\n\n"));
+      currentChunk = [];
+      currentLength = 0;
+    }
+  };
+
+  for (const para of paragraphs) {
+    // Oversized paragraphs (e.g. a whole CSV with single-newline rows) are
+    // split line-by-line, then hard-sliced so no chunk exceeds MAX_CHARS.
+    if (para.length > MAX_CHARS) {
+      pushChunk();
+      let lineBuf = "";
+      for (const line of para.split("\n")) {
+        if (lineBuf && lineBuf.length + line.length + 1 > MAX_CHARS) {
+          chunks.push(lineBuf);
+          lineBuf = line;
+        } else {
+          lineBuf = lineBuf ? `${lineBuf}\n${line}` : line;
+        }
+        while (lineBuf.length > MAX_CHARS) {
+          chunks.push(lineBuf.slice(0, MAX_CHARS));
+          lineBuf = lineBuf.slice(MAX_CHARS);
+        }
+      }
+      if (lineBuf) chunks.push(lineBuf);
+      continue;
+    }
+
+    if (currentLength + para.length > MAX_CHARS && currentChunk.length > 0) {
+      pushChunk();
+
+      const overlapStart = Math.max(0, currentChunk.length - OVERLAP_PARAS);
+      currentChunk = currentChunk.slice(overlapStart);
+      currentLength = currentChunk.reduce((sum, p) => sum + p.length, 0);
+    }
+
+    currentChunk.push(para);
+    currentLength += para.length;
+  }
+
+  if (currentChunk.length > 0) chunks.push(currentChunk.join("\n\n"));
+
+  if (chunks.length === 0 && normalized.trim().length > 0) {
+    for (let i = 0; i < normalized.length; i += MAX_CHARS) {
+      chunks.push(normalized.slice(i, i + MAX_CHARS));
+    }
+  }
+
+  return chunks;
+}
+
+// ── Embedding ──────────────────────────────────────────────────────────────────
+
+// Voyage free/trial keys are limited to ~3 RPM and 10K TPM. Embed in small
+// batches, paced to stay inside those limits, and retry 429s with backoff
+// (honoring Retry-After when provided).
+const VOYAGE_BATCH_MAX_TOKENS = 2500;
+const VOYAGE_MIN_INTERVAL_MS = 20_000;
+
+// Chunks processed per self-chained invocation. Sized so a single Voyage
+// request stays under the free-tier token budget even if a chunk is at the
+// 2400-char ceiling (~600 tokens).
+const VOYAGE_BATCH_SIZE = 4;
+
+function tokenEstimate(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function chunkBatches(chunks: string[]): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let currentTokens = 0;
+  for (const c of chunks) {
+    const tokens = tokenEstimate(c);
+    if (current.length > 0 && currentTokens + tokens > VOYAGE_BATCH_MAX_TOKENS) {
+      batches.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(c);
+    currentTokens += tokens;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function embedViaVoyage(chunks: string[]): Promise<number[][]> {
+  if (!VOYAGE_API_KEY) {
+    throw new Error("VOYAGE_API_KEY not set in edge function secrets");
+  }
+
+  console.log(`[Embedding/Voyage] Starting embedding of ${chunks.length} chunks`);
+  const batches = chunkBatches(chunks);
+  console.log(`[Embedding/Voyage] Split into ${batches.length} API batches (rate limit: ${VOYAGE_BATCH_MAX_TOKENS} tokens/batch)`);
+  const all: number[][] = [];
+  let lastError = "Unknown Voyage error";
+
+  for (let b = 0; b < batches.length; b++) {
+    if (b > 0) {
+      console.log(`[Embedding/Voyage] Waiting ${VOYAGE_MIN_INTERVAL_MS}ms before batch ${b + 1}/${batches.length}...`);
+      await sleep(VOYAGE_MIN_INTERVAL_MS);
+    }
+
+    const url = "https://api.voyageai.com/v1/embeddings";
+    const body = JSON.stringify({
+      model: "voyage-3",
+      input: batches[b],
+      input_type: "document",
+    });
+
+    let ok = false;
+    for (let attempt = 0; attempt < 4 && !ok; attempt++) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${VOYAGE_API_KEY}`,
+        },
+        body,
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const embeddings = (json as { data: Array<{ embedding: number[] }> }).data.map(
+          (d) => d.embedding
+        );
+        if (embeddings.length !== batches[b].length) {
+          throw new Error(
+            `Voyage returned ${embeddings.length} embeddings for ${batches[b].length} inputs`
+          );
+        }
+        console.log(`[Embedding/Voyage] Batch ${b + 1}/${batches.length} OK: ${embeddings.length} vectors`);
+        all.push(...embeddings);
+        ok = true;
+        break;
+      }
+
+      let detail = `Voyage API error: ${res.status}`;
+      try {
+        const err = await res.json();
+        detail = (err as { detail?: string; message?: string }).detail ||
+          (err as { message?: string }).message ||
+          detail;
+      } catch {
+        // non-JSON error body
+      }
+
+      if (res.status === 429 || res.status >= 500) {
+        const retryAfter = Number(res.headers.get("retry-after") || 0);
+        const delay = Math.min(1000 * Math.pow(2, attempt), 15000) +
+          (retryAfter > 0 ? retryAfter * 1000 : 0);
+        lastError = detail;
+        console.warn(`Voyage batch ${b + 1}/${batches.length} attempt ${attempt + 1} failed (${res.status}), retrying in ${delay}ms: ${detail}`);
+        await sleep(delay);
+        continue;
+      }
+
+      throw new Error(detail);
+    }
+
+    if (!ok) throw new Error(lastError);
+  }
+
+  console.log(`[Embedding/Voyage] SUCCESS: Generated ${all.length} total embeddings`);
+  return all;
+}
+
+async function embedViaOpenAI(chunks: string[]): Promise<number[][]> {
+  if (!OPENAI_API_KEY) {
+    throw new Error(
+      "VOYAGE_API_KEY not set and OPENAI_API_KEY fallback also not set"
+    );
+  }
+
+  console.log(`[Embedding/OpenAI] Starting embedding of ${chunks.length} chunks via text-embedding-3-small`);
+
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input: chunks,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(
+      (err as { error?: { message?: string } }).error?.message ||
+        `OpenAI API error: ${res.status}`
+    );
+  }
+
+  const json = await res.json();
+  const embeddings = (json as { data: Array<{ embedding: number[] }> }).data.map(
+    (d) => d.embedding
+  );
+  console.log(`[Embedding/OpenAI] SUCCESS: Generated ${embeddings.length} embeddings`);
+  return embeddings;
+}
+
+async function embedChunks(
+  chunks: string[]
+): Promise<{ embeddings: number[][]; model: string }> {
+  const useVoyage = !!VOYAGE_API_KEY;
+
+  if (useVoyage) {
+    try {
+      const embeddings = await embedViaVoyage(chunks);
+      return { embeddings, model: "voyage-3" };
+    } catch (err) {
+      console.warn("Voyage embedding failed, trying OpenAI fallback:", err);
+    }
+  }
+
+  const embeddings = await embedViaOpenAI(chunks);
+  return { embeddings, model: "text-embedding-3-small" };
+}
+
+// ── Management API helper ─────────────────────────────────────────────────────
+
+// Runs SQL via the Supabase Management API (direct Postgres connection, no
+// PostgREST). Used by the finalize pass because PostgREST is slow/hangs on
+// large vector payloads. Requires the MGMT_API_TOKEN secret (a Supabase
+// personal access token) and this project's ref.
+const MGMT_PROJECT_REF = "etlbgdqbpyhqwlkxcdqc";
+
+async function mgmtQuery<T = unknown>(sql: string): Promise<T> {
+  const token = Deno.env.get("MGMT_API_TOKEN");
+  if (!token) {
+    throw new Error("MGMT_API_TOKEN secret not set");
+  }
+  const res = await fetch(
+    `https://api.supabase.com/v1/projects/${MGMT_PROJECT_REF}/database/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: sql }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Management API query failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+  return (await res.json()) as T;
+}
+
+// ── Self-chaining ──────────────────────────────────────────────────────────────
+
+// Kicks off the next resumable processing step. Fire-and-forget: the spawned
+// invocation runs independently and either processes the next batch or
+// finalizes when all chunks are embedded.
+async function spawnNextInvocation(documentId: string, userId: string) {
+  try {
+    const baseUrl = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
+    const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    await fetch(`${baseUrl}/functions/v1/process-document`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${svcKey}`,
+        apikey: svcKey,
+      },
+      body: JSON.stringify({ document_id: documentId, admin_mode: true, user_id: userId }),
+    });
+  } catch (err) {
+    console.error("Failed to spawn next process-document invocation:", err);
+  }
+}
+
+// ── Main handler ───────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 200, headers: corsHeaders });
+  }
+
+  try {
+    const { document_id, admin_mode, user_id } = await req.json();
+
+    let supabase;
+    let currentUserId: string;
+
+    if (admin_mode && Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")) {
+      supabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      );
+      if (!user_id) {
+        return jsonResponse({ error: "user_id is required in admin_mode" }, 400);
+      }
+      currentUserId = user_id;
+    } else {
+      const authHeader = req.headers.get("Authorization");
+      if (!authHeader) {
+        return jsonResponse({ error: "Missing Authorization header" }, 401);
+      }
+
+      supabase = createClient(
+        Deno.env.get("SUPABASE_URL") ?? "",
+        Deno.env.get("SUPABASE_ANON_KEY") ?? "",
+        { global: { headers: { Authorization: authHeader } } }
+      );
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+      if (authError || !user) {
+        return jsonResponse({ error: "Unauthorized" }, 401);
+      }
+      currentUserId = user.id;
+    }
+
+    if (!document_id) {
+      return jsonResponse({ error: "document_id is required" }, 400);
+    }
+
+    const { data: doc, error: docError } = await supabase
+      .from("documents")
+      .select("id, name, extracted_text, content_text, user_id, status")
+      .eq("id", document_id)
+      .eq("user_id", currentUserId)
+      .single();
+
+    if (docError || !doc) {
+      return jsonResponse({ error: "Document not found" }, 404);
+    }
+
+    const text = doc.extracted_text || doc.content_text || "";
+    if (!text.trim()) {
+      await supabase
+        .from("documents")
+        .update({ status: "failed", error_message: "No text content to process" })
+        .eq("id", document_id);
+      return jsonResponse({ error: "No text content in document" }, 400);
+    }
+
+    await supabase
+      .from("documents")
+      .update({ status: "processing" })
+      .eq("id", document_id);
+
+    const chunks = chunkText(text);
+    console.log(`[Chunking] Document "${doc.name}" (${text.length} chars) → ${chunks.length} chunks`);
+    if (chunks.length > 0) {
+      console.log(`[Chunking] Chunk 0 (${chunks[0].length} chars): ${chunks[0].slice(0, 300).replace(/\n/g, ' ')}`);
+      if (chunks.length > 1) {
+        const lastIdx = chunks.length - 1;
+        console.log(`[Chunking] Chunk ${lastIdx} (${chunks[lastIdx].length} chars): ${chunks[lastIdx].slice(0, 300).replace(/\n/g, ' ')}`);
+      }
+    }
+    if (chunks.length === 0) {
+      await supabase
+        .from("documents")
+        .update({ status: "failed", error_message: "No chunks could be created from text" })
+        .eq("id", document_id);
+      return jsonResponse({ error: "No chunks created" }, 400);
+    }
+
+    const totalChunks = chunks.length;
+
+    // Resumable processing: chunks are embedded in small batches across
+    // chained invocations. Count how many are already stored for this doc.
+    const { count } = await supabase
+      .from("document_chunks")
+      .select("id", { count: "exact", head: true })
+      .eq("document_id", document_id);
+
+    const processed = count || 0;
+
+    if (processed === 0) {
+      // Fresh start: clear any stale chunks from previous runs.
+      await supabase
+        .from("document_chunks")
+        .delete()
+        .eq("document_id", document_id);
+    }
+
+    if (processed >= totalChunks) {
+      // All chunks embedded → finalize: compute PCA coordinates + model.
+      // Fetch embeddings through the Management API (direct SQL) because
+      // PostgREST chokes on multi-megabyte vector payloads.
+      const rows = await mgmtQuery<
+        Array<{ id: string; chunk_index: number; emb: string }>
+      >(
+        `select id, chunk_index, embedding::text as emb from document_chunks where document_id = '${document_id}' order by chunk_index;`
+      );
+
+      if (!rows || rows.length === 0) {
+        return jsonResponse({ error: "No chunks to finalize" }, 500);
+      }
+
+      const ordered = rows.sort((a, b) => a.chunk_index - b.chunk_index);
+      // embedding::text is a JSON-encoded float array like "[0.1,0.2,...]".
+      const embeddings = ordered.map((r) => JSON.parse(r.emb) as number[]);
+
+      // PCA is only used for 2D visualization; project on a 256-dim slice so
+      // the SVD stays fast even for large documents.
+      const { coords, model: pcaModel } = computeChunkCoordinates(
+        embeddings.map((e) => e.slice(0, 256))
+      );
+
+      // Write all coordinates in a single UPDATE (one round trip instead of
+      // one per chunk, which would blow the edge function time budget).
+      const values = ordered
+        .map((r, i) => `('${r.id}'::uuid, ${coords[i]?.x ?? 0}, ${coords[i]?.y ?? 0})`)
+        .join(",\n");
+      await mgmtQuery(
+        `update document_chunks c set x_coordinate = v.x, y_coordinate = v.y from (values ${values}) as v(id, x, y) where c.id = v.id;`
+      );
+
+      const dim = embeddings[0]?.length || EMBEDDING_DIM;
+
+      await supabase
+        .from("documents")
+        .update({ status: "ready", pca_model: JSON.stringify(pcaModel), processed: true })
+        .eq("id", document_id);
+
+      return jsonResponse({
+        success: true,
+        document_id,
+        chunks_created: totalChunks,
+        dimensions: dim,
+        status: "ready",
+      });
+    }
+
+    // Pace chained invocations so we stay inside Voyage's free-tier rate
+    // limits (3 RPM / 10K TPM).
+    await sleep(VOYAGE_MIN_INTERVAL_MS);
+
+    const batch = chunks.slice(processed, processed + VOYAGE_BATCH_SIZE);
+    console.log(`[Embedding] Processing batch: chunks ${processed}–${processed + batch.length - 1}/${chunks.length}`);
+    const { embeddings, model } = await embedChunks(batch);
+    console.log(`[Embedding] Generated ${embeddings.length} embeddings via ${model}`);
+
+    const normalizedEmbeddings = embeddings.map(padEmbedding);
+    const dim = normalizedEmbeddings[0]?.length || EMBEDDING_DIM;
+
+    const chunkRows = batch.map((content, i) => ({
+      document_id,
+      user_id: currentUserId,
+      chunk_index: processed + i,
+      content,
+      embedding: normalizedEmbeddings[i] || null,
+      token_count: Math.ceil(content.length / 4),
+      x_coordinate: null,
+      y_coordinate: null,
+    }));
+
+    const { error: insertError } = await supabase
+      .from("document_chunks")
+      .insert(chunkRows);
+
+    if (insertError) {
+      console.error("Failed to insert chunks:", insertError);
+      await supabase
+        .from("documents")
+        .update({ status: "failed", error_message: insertError.message })
+        .eq("id", document_id);
+      return jsonResponse({ error: insertError.message }, 500);
+    }
+
+    const done = processed + batch.length;
+    console.log(`[Embedding] Stored ${chunkRows.length} chunks in document_chunks table (total: ${done}/${chunks.length})`);
+
+    // Chain the next invocation (processes the next batch, or finalizes when
+    // nothing is left). Fire-and-forget so this invocation returns promptly.
+    spawnNextInvocation(document_id, currentUserId);
+
+    return jsonResponse({
+      success: true,
+      document_id,
+      status: done < totalChunks ? "processing" : "finalizing",
+      chunks_processed: done,
+      total_chunks: totalChunks,
+      dimensions: dim,
+      model_used: model,
+    });
+  } catch (error) {
+    console.error("process-document error:", error);
+    const message =
+      error instanceof Error ? error.message : "Internal server error";
+    return jsonResponse({ error: message }, 500);
+  }
+});
