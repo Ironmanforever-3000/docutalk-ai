@@ -6,6 +6,8 @@ ALTER TABLE document_chunks
   ADD COLUMN IF NOT EXISTS y_coordinate float;
 
 -- Update the match function to also return coordinates
+DROP FUNCTION IF EXISTS match_document_chunks(VECTOR(1536), UUID, INT, FLOAT);
+
 CREATE OR REPLACE FUNCTION match_document_chunks(
   query_embedding VECTOR(1536),
   match_user_id UUID,
