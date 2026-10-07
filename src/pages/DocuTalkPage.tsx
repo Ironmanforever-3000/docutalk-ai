@@ -130,19 +130,15 @@ export default function DocuTalkPage() {
         return;
       }
 
-      const res = await fetch('/api/test-provider', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ provider, apiKey: resolvedKey }),
+      const { data, error } = await supabase.functions.invoke('test-provider', {
+        body: { provider, apiKey: resolvedKey },
       });
 
-      if (res.ok) {
+      if (!error && data?.success) {
         setTestResult({ ok: true, message: `Connected! ${provider} responded successfully.` });
       } else {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        setTestResult({ ok: false, message: body?.error || `HTTP ${res.status} ${res.statusText}` });
+        const errorMsg = data?.error || error?.message || 'Connection failed';
+        setTestResult({ ok: false, message: errorMsg });
       }
     } catch (err) {
       setTestResult({ ok: false, message: err instanceof Error ? err.message : 'Connection failed' });

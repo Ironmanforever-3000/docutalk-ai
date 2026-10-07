@@ -27,39 +27,6 @@ async function invokeDataSourceFunction(
   action: 'test' | 'sync',
   dataSourceId: string
 ): Promise<DataSourceActionResult> {
-  if (
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ) {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
-
-      const res = await fetch('/api/data-source', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ action, dataSourceId }),
-      });
-
-      if (res.ok) {
-        return (await res.json()) as DataSourceActionResult;
-      }
-
-      const errJson = await res.json().catch(() => ({}));
-      throw new Error(errJson.error || `Local dev server failed to ${action} database`);
-    } catch (localErr) {
-      console.warn(
-        'Local database sync failed, falling back to Supabase Edge Function:',
-        localErr
-      );
-    }
-  }
-
   const { data, error } = await supabase.functions.invoke('data-source', {
     body: { action, dataSourceId },
   });

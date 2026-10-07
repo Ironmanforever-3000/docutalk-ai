@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { embed } from "../_shared/embed.ts";
 
 interface PcaModel {
   loadings: number[][];
@@ -35,21 +36,6 @@ const corsHeaders = {
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const VOYAGE_API_KEY = Deno.env.get("VOYAGE_API_KEY");
-const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY");
-
-// Query embeddings must match the VECTOR(1536) column used by
-// match_document_chunks. Voyage-3 returns 1024-dim vectors, so pad to 1536.
-const EMBEDDING_DIM = 1536;
-
-function padEmbedding(emb: number[]): number[] {
-  if (emb.length === EMBEDDING_DIM) return emb;
-  if (emb.length > EMBEDDING_DIM) return emb.slice(0, EMBEDDING_DIM);
-  return [...emb, ...new Array(EMBEDDING_DIM - emb.length).fill(0)];
-}
-
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -57,74 +43,19 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-async function embedQuery(
-  query: string
-): Promise<{ embedding: number[]; model: string }> {
-  const useVoyage = !!VOYAGE_API_KEY;
-  if (useVoyage) {
-    try {
-      const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${VOYAGE_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "voyage-3",
-          input: [query],
-          input_type: "query",
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        return {
-          embedding: padEmbedding((json as { data: Array<{ embedding: number[] }> }).data[0].embedding),
-          model: "voyage-3",
-        };
-      }
-      console.warn("Voyage query embedding failed, trying OpenAI fallback");
-    } catch (err) {
-      console.warn("Voyage query embedding error:", err);
-    }
-  }
-
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: [query],
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(
-      (err as { error?: { message?: string } }).error?.message ||
-        `OpenAI API error: ${res.status}`
-    );
-  }
-
-  const json = await res.json();
-  return {
-    embedding: (json as { data: Array<{ embedding: number[] }> }).data[0].embedding,
-    model: "text-embedding-3-small",
-  };
-}
-
 async function callLLM(
   messages: Array<{ role: string; content: string }>,
   apiKey: string,
   provider: string
 ): Promise<string> {
+  const system =
+    "You are DocuTalk AI, a document-grounded assistant. Answer using ONLY the context provided. If the answer isn't in the context, say so. Cite the source document and chunk index for each piece of information you use.";
+
   if (provider === "anthropic") {
-    const key = apiKey || ANTHROPIC_API_KEY || "";
+    const key = apiKey || Deno.env.get("ANTHROPIC_API_KEY") || "";
     if (!key) throw new Error("No API key for Anthropic");
 
+    const model = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-3-5-sonnet-20241022";
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -134,20 +65,15 @@ async function callLLM(
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model,
         max_tokens: 4096,
-        system:
-          "You are DocuTalk AI, a document-grounded assistant. Answer using ONLY the context provided. If the answer isn't in the context, say so. Cite the source document and chunk index for each piece of information you use.",
+        system,
         messages: messages.slice(-20),
       }),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(
-        (err as { error?: { message?: string } }).error?.message ||
-          `Anthropic API error: ${res.status}`
-      );
+      throw new Error(`Anthropic API error: ${res.status} ${await res.text()}`);
     }
 
     const json = await res.json();
@@ -155,9 +81,10 @@ async function callLLM(
   }
 
   if (provider === "openai") {
-    const key = OPENAI_API_KEY || "";
+    const key = apiKey || Deno.env.get("OPENAI_API_KEY") || "";
     if (!key) throw new Error("No API key for OpenAI");
 
+    const model = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -165,26 +92,15 @@ async function callLLM(
         Authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are DocuTalk AI, a document-grounded assistant. Answer using ONLY the context provided. If the answer isn't in the context, say so. Cite the source document and chunk index for each piece of information you use.",
-          },
-          ...messages.slice(-20),
-        ],
+        model,
+        messages: [{ role: "system", content: system }, ...messages.slice(-20)],
         max_tokens: 4096,
         temperature: 0.3,
       }),
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(
-        (err as { error?: { message?: string } }).error?.message ||
-          `OpenAI API error: ${res.status}`
-      );
+      throw new Error(`OpenAI API error: ${res.status} ${await res.text()}`);
     }
 
     const json = await res.json();
@@ -195,13 +111,11 @@ async function callLLM(
   }
 
   if (provider === "groq") {
-    const key = apiKey || GROQ_API_KEY || "";
+    const key = apiKey || Deno.env.get("GROQ_API_KEY") || "";
     if (!key) throw new Error("No API key for Groq");
 
-    const groqModels = [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-    ];
+    const modelString = Deno.env.get("GROQ_MODELS") ?? "llama-3.3-70b-versatile,llama-3.1-8b-instant";
+    const groqModels = modelString.split(',').map(m => m.trim());
 
     let lastError = "";
     for (const model of groqModels) {
@@ -214,14 +128,7 @@ async function callLLM(
           },
           body: JSON.stringify({
             model,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are DocuTalk AI, a document-grounded assistant. Answer using ONLY the context provided. If the answer isn't in the context, say so. Cite the source document and chunk index for each piece of information you use.",
-              },
-              ...messages.slice(-20),
-            ],
+            messages: [{ role: "system", content: system }, ...messages.slice(-20)],
             max_tokens: 4096,
             temperature: 0.3,
           }),
@@ -232,8 +139,7 @@ async function callLLM(
           return json.choices?.[0]?.message?.content || "";
         }
 
-        const errBody = await res.json().catch(() => ({})) as { error?: { message?: string } };
-        lastError = errBody?.error?.message || `HTTP ${res.status}`;
+        lastError = `HTTP ${res.status} ${await res.text()}`;
         console.warn(`Groq model "${model}" failed: ${lastError}`);
       } catch (fetchErr) {
         lastError = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
@@ -303,7 +209,9 @@ Deno.serve(async (req: Request) => {
       try {
         console.log(`[RAG-Chat] Query: "${message}"`);
         console.log(`[RAG-Chat] Searching in ${document_ids.length} active document(s)`);
-        const { embedding } = await embedQuery(message);
+        
+        const embeddings = await embed([message], 'query');
+        const embedding = embeddings[0];
         console.log(`[RAG-Chat] Query embedding generated (${embedding.length} dimensions)`);
 
         const { data: chunks, error: matchError } = await supabase.rpc(
@@ -313,6 +221,7 @@ Deno.serve(async (req: Request) => {
             match_user_id: user.id,
             match_count: 8,
             match_threshold: 0.3,
+            match_document_ids: document_ids,
           }
         );
 
@@ -320,13 +229,8 @@ Deno.serve(async (req: Request) => {
           console.warn("Vector search failed:", matchError);
         } else if (chunks && (chunks as Array<Record<string, unknown>>).length > 0) {
           console.log(`[RAG-Chat] Vector search returned ${(chunks as Array<Record<string, unknown>>).length} matches`);
-          const filtered = (chunks as Array<Record<string, unknown>>).filter(
-            (c) => document_ids.includes(c.document_id as string)
-          );
-
-          console.log(`[RAG-Chat] After filtering by active documents: ${filtered.length} chunks`);
-          const top = filtered.slice(0, 8);
-          console.log(`[RAG-Chat] Retrieved top ${top.length} chunks:`);
+          const top = chunks as Array<Record<string, unknown>>;
+          
           top.forEach((c, i) => {
             const sim = (c.similarity as number) || 0;
             const docName = (c.document_name as string) || "Unknown";
@@ -386,8 +290,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!contextBlock && document_ids.length > 0) {
-      // Fallback: fetch full document text directly (covers the case where
-      // a document was just attached but chunking hasn't completed yet)
+      // Fallback: fetch full document text directly
       try {
         const { data: docs } = await supabase
           .from("documents")
@@ -442,17 +345,10 @@ ${contextBlock}`
     console.log(`[RAG-Chat] Prompt Construction:`);
     console.log(`  System message length: ${systemMessage.content.length} chars`);
     console.log(`  Context block present: ${contextBlock.length > 0}`);
-    if (contextBlock.length > 0) {
-      console.log(`  Context block size: ${contextBlock.length} chars`);
-      console.log(`  First 500 chars of context:\n${contextBlock.slice(0, 500)}`);
-    }
     console.log(`  History messages: ${history.length}`);
-    console.log(`  Total LLM messages: ${llmMessages.length}`);
     console.log(`[RAG-Chat] Calling ${provider} LLM...`);
 
     const response = await callLLM(llmMessages, apiKey, provider);
-
-    console.log(`[RAG-Chat] LLM Response (first 300 chars): ${response.slice(0, 300)}...`);
 
     return jsonResponse({
       response,
