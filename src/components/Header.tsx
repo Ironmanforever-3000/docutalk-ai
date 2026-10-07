@@ -1,18 +1,17 @@
 import { useState, useEffect } from 'react';
 import { User } from '@supabase/supabase-js';
 import { Bell, Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useUserProfile } from '../contexts/UserProfileContext';
 import { supabase } from '../lib/supabase';
 import { Notification } from '../types';
 
-type Page = 'Home' | 'Files' | 'Projects' | 'DataSources' | 'Library' | 'DocuTalk' | 'Settings';
-
 interface HeaderProps {
   user: User;
-  onNavigate?: (page: Page) => void;
 }
 
-export default function Header({ user, onNavigate }: HeaderProps) {
+export default function Header({ user }: HeaderProps) {
+  const navigate = useNavigate();
   const { profile } = useUserProfile();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -103,7 +102,7 @@ export default function Header({ user, onNavigate }: HeaderProps) {
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && searchQuery.trim()) {
-                  onNavigate?.('Files');
+                  navigate(`/app/files?q=${encodeURIComponent(searchQuery.trim())}`);
                 }
               }}
               placeholder="Search documents, projects, data sources... (Enter to search Files)"
@@ -184,7 +183,7 @@ export default function Header({ user, onNavigate }: HeaderProps) {
           </div>
 
           <button
-            onClick={() => onNavigate?.('Settings')}
+            onClick={() => navigate('/app/settings')}
             className="flex items-center gap-3 pl-4 border-l border-ink-700 hover:opacity-80 transition-opacity"
           >
             <div className="w-10 h-10 bg-gradient-to-br from-ember-500 to-ember-700 rounded-full flex items-center justify-center overflow-hidden">

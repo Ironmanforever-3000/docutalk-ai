@@ -8,26 +8,19 @@ import {
   Settings,
   LogOut,
 } from 'lucide-react';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import Logo from './Logo';
 
-type Page = 'Home' | 'Files' | 'Projects' | 'DataSources' | 'Library' | 'DocuTalk' | 'Settings';
-
-interface SidebarProps {
-  currentPage: Page;
-  onPageChange: (page: Page) => void;
-}
-
 const menuItems = [
-  { id: 'Home' as Page, icon: Home, label: 'Home' },
-  { id: 'Files' as Page, icon: Files, label: 'Files' },
-  { id: 'Projects' as Page, icon: FolderKanban, label: 'Projects' },
-  { id: 'DataSources' as Page, icon: Database, label: 'Data Sources' },
-  { id: 'Library' as Page, icon: Library, label: 'Library' },
-  { id: 'DocuTalk' as Page, icon: MessageSquare, label: 'DocuTalk AI' },
+  { path: '/app', icon: Home, label: 'Home', end: true },
+  { path: '/app/files', icon: Files, label: 'Files' },
+  { path: '/app/projects', icon: FolderKanban, label: 'Projects' },
+  { path: '/app/data-sources', icon: Database, label: 'Data Sources' },
+  { path: '/app/chat', icon: MessageSquare, label: 'DocuTalk AI' },
 ];
 
-export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
+export default function Sidebar() {
   const { signOut } = useAuth();
 
   return (
@@ -45,13 +38,13 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
       <nav className="flex-1 p-4 space-y-2">
         {menuItems.map((item) => {
           const Icon = item.icon;
-          const isActive = currentPage === item.id;
 
           return (
-            <button
-              key={item.id}
-              onClick={() => onPageChange(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+            <NavLink
+              key={item.path}
+              to={item.path}
+              end={item.end}
+              className={({ isActive }) => `w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
                 isActive
                   ? 'bg-ember-600 text-parchment'
                   : 'text-ash hover:bg-ink-800 hover:text-parchment'
@@ -59,23 +52,23 @@ export default function Sidebar({ currentPage, onPageChange }: SidebarProps) {
             >
               <Icon className="w-5 h-5" />
               <span className="font-medium">{item.label}</span>
-            </button>
+            </NavLink>
           );
         })}
       </nav>
 
       <div className="p-4 border-t border-ink-700">
-        <button
-          onClick={() => onPageChange('Settings')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'Settings'
+        <NavLink
+          to="/app/settings"
+          className={({ isActive }) => `w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+            isActive
               ? 'bg-ember-600 text-parchment'
               : 'text-ash hover:bg-ink-800 hover:text-parchment'
           }`}
         >
           <Settings className="w-5 h-5" />
           <span className="font-medium">Settings</span>
-        </button>
+        </NavLink>
 
         <button
           onClick={signOut}
