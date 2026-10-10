@@ -130,9 +130,7 @@ export default function SettingsPage() {
   const tabs = [
     { id: 'profile', icon: User, label: 'Profile' },
     { id: 'notifications', icon: Bell, label: 'Notifications' },
-    { id: 'appearance', icon: Palette, label: 'Appearance' },
     { id: 'security', icon: Shield, label: 'Security' },
-    { id: 'api', icon: Key, label: 'API Keys' },
   ];
 
   if (loading) {
@@ -201,49 +199,6 @@ export default function SettingsPage() {
                 </button>
               </div>
 
-              <div className="flex items-center gap-6">
-                <div className="relative group">
-                  <div className="w-24 h-24 bg-gradient-to-br from-ember-500 to-ember-700 rounded-full flex items-center justify-center overflow-hidden">
-                    {avatarPreview ? (
-                      <img
-                        src={avatarPreview}
-                        alt="Avatar"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <span className="font-display text-3xl font-semibold text-parchment">
-                        {displayName?.charAt(0).toUpperCase() || user?.email?.charAt(0).toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <Camera className="w-6 h-6 text-parchment" />
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleAvatarChange}
-                    className="hidden"
-                  />
-                </div>
-                <div>
-                  <p className="text-parchment font-medium mb-2">Profile Picture</p>
-                  <p className="text-ash text-sm mb-3">
-                    Click on the avatar to change your profile picture
-                  </p>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2 bg-ink-700 hover:bg-ash/20 text-parchment rounded-lg transition-colors text-sm"
-                  >
-                    Change Avatar
-                  </button>
-                </div>
-              </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-parchment-300 mb-2">
@@ -268,23 +223,6 @@ export default function SettingsPage() {
                     className="w-full px-4 py-2 bg-ink-800 border border-ink-700 rounded-lg text-parchment placeholder-ash/60 focus:outline-none focus:border-ember-500 transition-colors"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-parchment-300 mb-2">
-                  Language
-                </label>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="w-full px-4 py-2 bg-ink-800 border border-ink-700 rounded-lg text-parchment focus:outline-none focus:border-ember-500"
-                >
-                  {languages.map((lang) => (
-                    <option key={lang.code} value={lang.code}>
-                      {lang.name}
-                    </option>
-                  ))}
-                </select>
               </div>
             </div>
           )}
@@ -324,82 +262,6 @@ export default function SettingsPage() {
                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
                       emailNotifications ? 'right-1' : 'left-1'
                     }`}></div>
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between p-4 bg-ink-800 rounded-lg">
-                  <div>
-                    <p className="text-parchment font-medium">Push Notifications</p>
-                    <p className="text-ash text-sm">Browser push notifications for real-time updates</p>
-                  </div>
-                  <button
-                    onClick={() => setPushNotifications(!pushNotifications)}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      pushNotifications ? 'bg-ember-600' : 'bg-ink-700'
-                    }`}
-                  >
-                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                      pushNotifications ? 'right-1' : 'left-1'
-                    }`}></div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'appearance' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="font-display text-xl font-semibold text-parchment">Appearance Settings</h2>
-                <button
-                  onClick={handleSaveProfile}
-                  disabled={saving}
-                  className="flex items-center gap-2 px-4 py-2 bg-ember-600 hover:bg-ember-700 text-parchment rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {saved ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      Saved
-                    </>
-                  ) : (
-                    'Save Changes'
-                  )}
-                </button>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-parchment-300 mb-3">Theme</label>
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Dark theme card — preview uses genuine dark colours */}
-                  <button
-                    onClick={() => setTheme('dark')}
-                    className={`p-4 rounded-lg border-2 transition-colors ${
-                      theme === 'dark'
-                        ? 'border-ember-500 bg-ember-500/10'
-                        : 'border-ink-700 hover:border-ash/60'
-                    }`}
-                  >
-                    <div className="rounded-lg p-4 mb-3" style={{ backgroundColor: '#111827' }}>
-                      <div className="w-full h-4 rounded mb-2" style={{ backgroundColor: '#374151' }} />
-                      <div className="w-3/4 h-3 rounded" style={{ backgroundColor: '#1f2937' }} />
-                    </div>
-                    <p className="text-parchment font-medium">Dark</p>
-                  </button>
-
-                  {/* Light theme card — preview uses genuine light colours */}
-                  <button
-                    onClick={() => setTheme('light')}
-                    className={`p-4 rounded-lg border-2 transition-colors ${
-                      theme === 'light'
-                        ? 'border-ember-500 bg-ember-500/10'
-                        : 'border-ink-700 hover:border-ash/60'
-                    }`}
-                  >
-                    <div className="rounded-lg p-4 mb-3" style={{ backgroundColor: '#f9fafb' }}>
-                      <div className="w-full h-4 rounded mb-2" style={{ backgroundColor: '#d1d5db' }} />
-                      <div className="w-3/4 h-3 rounded" style={{ backgroundColor: '#e5e7eb' }} />
-                    </div>
-                    <p className="text-parchment font-medium">Light</p>
                   </button>
                 </div>
               </div>
@@ -452,32 +314,6 @@ export default function SettingsPage() {
                     </button>
                   </div>
                 </div>
-            </div>
-          )}
-
-          {activeTab === 'api' && (
-            <div className="space-y-6">
-              <h2 className="font-display text-xl font-semibold text-parchment">API Keys</h2>
-
-              <div className="p-4 bg-ink-800 rounded-lg">
-                <p className="text-ash mb-4">
-                  API keys allow programmatic access to your DocuTalk account.
-                </p>
-                <div className="bg-ink-800 p-4 rounded-lg mb-4">
-                  <p className="text-xs text-ash/60 mb-1">API Key</p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-ink-800 px-3 py-2 rounded text-sm text-ash font-mono">
-                      {user ? `dt_${user.id.slice(0, 8)}...` : 'Generate a key to get started'}
-                    </code>
-                    <button className="px-3 py-2 bg-ember-600 hover:bg-ember-700 text-parchment rounded text-sm">
-                      Generate
-                    </button>
-                  </div>
-                </div>
-                <p className="text-yellow-500/80 text-sm">
-                  Keep your API keys secret. Never share them publicly.
-                </p>
-              </div>
             </div>
           )}
         </div>

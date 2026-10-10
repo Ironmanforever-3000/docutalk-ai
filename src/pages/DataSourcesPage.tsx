@@ -24,11 +24,6 @@ export default function DataSourcesPage() {
 
   const dataTypes = [
     { id: 'postgres', label: 'PostgreSQL', icon: '🐘', color: 'blue' },
-    { id: 'mysql', label: 'MySQL', icon: '🐬', color: 'orange' },
-    { id: 'mongodb', label: 'MongoDB', icon: '🍀', color: 'green' },
-    { id: 'redis', label: 'Redis', icon: '⚡', color: 'red' },
-    { id: 'elasticsearch', label: 'Elasticsearch', icon: '🔍', color: 'yellow' },
-    { id: 'api', label: 'REST API', icon: '🌐', color: 'purple' },
   ];
 
   useEffect(() => {

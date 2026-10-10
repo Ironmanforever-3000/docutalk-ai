@@ -20,17 +20,6 @@ export default function DocuTalkPage() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   
-  // Toast & Email Preview states
-  const [toast, setToast] = useState<{
-    show: boolean;
-    message: string;
-    email: string;
-    summary: string;
-    fullSolution: string;
-    prompt: string;
-    emailEnabled: boolean;
-  } | null>(null);
-  const [showEmailModal, setShowEmailModal] = useState(false);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string; created_at: string }>>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -479,76 +468,7 @@ export default function DocuTalkPage() {
     document.body.removeChild(link);
   };
 
-  const triggerEmailWorkflow = async (userMessage: string, responseText: string) => {
-    if (!user) return;
 
-    const emailEnabled = profile?.email_notifications ?? true;
-    
-    // 1. Generate summary via chat edge function
-    let summaryText = "Analyzing your documents to extract the best solution...";
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        const res = await supabase.functions.invoke('chat', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body: {
-            message: `Review this user request and solution, then write a brief 2-3 sentence summary of what was solved for an email body. Do not use markdown or special formatting. Keep it plain text.
-
-        User Request: "${userMessage}"
-        Solution:
-        ${responseText.slice(0, 1000)}`,
-            history: [],
-            documents: [],
-            apiKey: apiKey || undefined,
-            provider,
-          },
-        });
-        if (res.data?.response) {
-          summaryText = res.data.response.trim();
-        }
-      }
-    } catch (err) {
-      console.warn("Summary generation failed:", err);
-      summaryText = `DocuTalk AI successfully analyzed your document context and generated a comprehensive solution for your request: "${userMessage.slice(0, 60)}...".`;
-    }
-
-    // 2. Insert DB notification
-    try {
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        title: 'Solution Document Sent',
-        message: `Your RAG analysis for "${userMessage.slice(0, 30)}..." is complete and emailed to ${user.email}.`,
-        type: 'success',
-      });
-    } catch (err) {
-      console.error("Error inserting notification:", err);
-    }
-
-    // 3. Set toast notification
-    setToast({
-      show: true,
-      message: emailEnabled 
-        ? `🚀 Analysis complete! We've dispatched your solution document to ${user.email}.`
-        : `🚀 Analysis complete! Your solution document is compiled.`,
-      email: user.email || '',
-      summary: summaryText,
-      fullSolution: responseText,
-      prompt: userMessage,
-      emailEnabled
-    });
-
-    // Auto-dismiss toast after 8 seconds
-    setTimeout(() => {
-      setToast(prev => {
-        if (prev && prev.prompt === userMessage) {
-          return { ...prev, show: false };
-        }
-        return prev;
-      });
-    }, 8000);
-  };
 
   const handleSend = async () => {
     if (!input.trim() || loading || !user || !sessionId) return;
@@ -932,16 +852,14 @@ export default function DocuTalkPage() {
                             .slice(0, messages.indexOf(message))
                             .reverse()
                             .find((m) => m.role === 'user');
-                          triggerEmailWorkflow(
-                            userMsg?.content || message.content.slice(0, 60),
-                            message.content
-                          );
+                          const title = userMsg ? userMsg.content.slice(0, 30).replace(/[^a-zA-Z0-9]/g, '_') : 'solution';
+                          downloadSolutionFile(`${title}.md`, message.content);
                         }}
-                        className="hover:text-green-400 transition-colors inline-flex items-center gap-1"
-                        title="Send solution to email"
+                        className="hover:text-ember-400 transition-colors inline-flex items-center gap-1"
+                        title="Download as Markdown"
                       >
-                        <Mail className="w-3 h-3" />
-                        Email
+                        <Download className="w-3 h-3" />
+                        Download .md
                       </button>
                     </>
                   )}
@@ -1206,161 +1124,6 @@ export default function DocuTalkPage() {
                 className="flex-1 py-2 bg-ember-600 hover:bg-ember-700 text-parchment text-xs font-medium rounded-lg transition-colors"
               >
                 Save Settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* RAG-to-Email Toast Notification */}
-      {toast && toast.show && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-md bg-ink-800/95 border border-ink-700 rounded-xl shadow-2xl p-4 backdrop-blur-md animate-slide-in flex items-start gap-3 text-left">
-          <div className="p-2 bg-ember-500/10 rounded-lg text-ember-400">
-            <Mail className="w-5 h-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-display text-sm font-semibold text-parchment">RAG Analysis Completed</p>
-            <p className="text-xs text-ash mt-1">{toast.message}</p>
-            <div className="flex gap-2 mt-3">
-              <button
-                onClick={() => {
-                  setShowEmailModal(true);
-                  setToast(prev => prev ? { ...prev, show: false } : null);
-                }}
-                className="px-3 py-1.5 bg-ember-600 hover:bg-ember-700 text-parchment text-[11px] font-semibold rounded-md transition-colors flex items-center gap-1"
-              >
-                <Inbox className="w-3.5 h-3.5" /> Preview Email
-              </button>
-              <button
-                onClick={() => downloadSolutionFile(`DocuTalk_Solution_${Date.now()}.md`, toast.fullSolution)}
-                className="px-3 py-1.5 bg-ink-700 hover:bg-ink-700 text-parchment-300 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 border border-ink-700"
-              >
-                <Download className="w-3.5 h-3.5" /> Download Doc
-              </button>
-            </div>
-          </div>
-          <button
-            onClick={() => setToast(prev => prev ? { ...prev, show: false } : null)}
-            className="text-ash/60 hover:text-parchment-300 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Email Inbox Preview Modal */}
-      {showEmailModal && toast && (
-        <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-ink-800 rounded-xl max-w-2xl w-full border border-ink-700 shadow-2xl overflow-hidden flex flex-col max-h-[85vh] text-left">
-            <div className="flex items-center justify-between p-4 border-b border-ink-700 bg-ink-800/50">
-              <div className="flex items-center gap-2">
-                <Mail className="w-5 h-5 text-ember-400" />
-                <h2 className="text-sm font-semibold text-parchment">Dispatched Email Preview</h2>
-              </div>
-              <button
-                onClick={() => setShowEmailModal(false)}
-                className="text-ash hover:text-parchment"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Email Headers */}
-            <div className="p-4 bg-ink-800/30 border-b border-ink-700 text-xs space-y-2 text-ash">
-              <div>
-                <span className="font-semibold text-ash/60 mr-2">FROM:</span>
-                <span className="text-parchment-300">DocuTalk RAG Service &lt;no-reply@docutalk.ai&gt;</span>
-              </div>
-              <div>
-                <span className="font-semibold text-ash/60 mr-2">TO:</span>
-                <span className="text-ember-400">{toast.email}</span>
-              </div>
-              <div>
-                <span className="font-semibold text-ash/60 mr-2">SUBJECT:</span>
-                <span className="text-parchment font-medium">📝 DocuTalk Solution: {toast.prompt.slice(0, 45)}...</span>
-              </div>
-              <div>
-                <span className="font-semibold text-ash/60 mr-2">STATUS:</span>
-                <span className="text-green-400 font-semibold flex items-center gap-1 inline-flex">
-                  <Check className="w-3.5 h-3.5" /> Dispatched successfully (Email Toggle ON)
-                </span>
-              </div>
-            </div>
-
-            {/* Simulated Email Body */}
-            <div className="flex-1 overflow-y-auto p-8 bg-[#f9fafb] text-gray-800">
-              <div className="max-w-xl mx-auto bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-6 bg-gradient-to-r from-ember-600 to-ember-700 text-parchment">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center">
-                      <Inbox className="w-5 h-5 text-parchment" />
-                    </div>
-                    <span className="font-bold text-lg tracking-tight">DocuTalk AI</span>
-                  </div>
-                  <p className="text-xs text-ember-500">Intelligent RAG Document Solution</p>
-                </div>
-
-                <div className="p-6 space-y-6 text-sm leading-relaxed">
-                  <div>
-                    <p className="font-semibold text-gray-900 text-base text-left">Hello,</p>
-                    <p className="text-ash/50 mt-2 text-left">
-                      Our RAG-based AI model has finished analyzing your private knowledge sources and compiled a solution context for your request.
-                    </p>
-                  </div>
-
-                  <div className="p-4 bg-gray-50 rounded-lg border-l-4 border-ember-500 text-gray-700 text-left">
-                    <p className="text-xs font-bold text-ash/60 uppercase tracking-wider">Solution Summary</p>
-                    <p className="mt-1 font-medium italic text-gray-900">"{toast.summary}"</p>
-                  </div>
-
-                  <div className="text-center pt-2">
-                    <a
-                      href="http://localhost:5173/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-ember-600 hover:bg-ember-700 text-parchment text-xs font-semibold rounded-lg shadow-md transition-all hover:scale-[1.02]"
-                    >
-                      View & Refine on DocuTalk <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-
-                  {/* Attachment Section */}
-                  <div className="pt-4 border-t border-gray-100">
-                    <p className="text-xs font-semibold text-ash/60 mb-2 text-left">ATTACHMENTS (1)</p>
-                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-5 h-5 text-red-500" />
-                        <div className="text-left">
-                          <p className="text-xs font-semibold text-gray-900 font-sans">DocuTalk_Solution.md</p>
-                          <p className="text-[10px] text-ash/60">Markdown Document · 24 KB</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => downloadSolutionFile(`DocuTalk_Solution_${Date.now()}.md`, toast.fullSolution)}
-                        className="p-1.5 bg-white hover:bg-gray-100 border border-gray-200 text-ash/50 hover:text-ember-700 rounded-md transition-colors flex items-center justify-center"
-                        title="Download Attachment"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-gray-50 border-t border-gray-100 text-center text-[10px] text-ash">
-                  This is an automated delivery sent by DocuTalk AI based on your in-app preferences.
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Actions Footer */}
-            <div className="p-4 border-t border-ink-700 bg-ink-800/50 flex justify-between items-center text-xs">
-              <span className="text-ash/60">
-                💡 Sent using transactional email settings. Configure keys in settings to deploy.
-              </span>
-              <button
-                onClick={() => setShowEmailModal(false)}
-                className="px-4 py-2 bg-ink-700 hover:bg-ink-700 text-parchment font-semibold rounded-lg transition-colors border border-ink-700"
-              >
-                Close Preview
               </button>
             </div>
           </div>
