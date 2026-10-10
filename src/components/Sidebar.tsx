@@ -3,7 +3,6 @@ import {
   Files,
   FolderKanban,
   Database,
-  Library,
   MessageSquare,
   Settings,
   LogOut,

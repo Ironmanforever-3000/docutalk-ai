@@ -1,12 +1,12 @@
-import { useState, useRef, useEffect } from 'react';
-import { User, Bell, Shield, Palette, Key, Camera, Save, Check } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { User, Bell, Shield, Save, Check } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserProfile } from '../contexts/UserProfileContext';
 import { supabase } from '../lib/supabase';
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const { profile, loading, updateProfile, uploadAvatar } = useUserProfile();
+  const { profile, loading, updateProfile } = useUserProfile();
   const [activeTab, setActiveTab] = useState('profile');
   const [displayName, setDisplayName] = useState('');
   const [language, setLanguage] = useState('en');
@@ -15,23 +15,10 @@ export default function SettingsPage() {
   const [pushNotifications, setPushNotifications] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState(false);
-
-  const languages = [
-    { code: 'en', name: 'English' },
-    { code: 'es', name: 'Español' },
-    { code: 'fr', name: 'Français' },
-    { code: 'de', name: 'Deutsch' },
-    { code: 'zh', name: '中文' },
-    { code: 'ja', name: '日本語' },
-    { code: 'ko', name: '한국어' },
-  ];
 
   useEffect(() => {
     if (profile) {
@@ -40,33 +27,8 @@ export default function SettingsPage() {
       setTheme(profile.theme || 'dark');
       setEmailNotifications(profile.email_notifications ?? true);
       setPushNotifications(profile.push_notifications ?? false);
-      if (profile.avatar_url) {
-        setAvatarPreview(profile.avatar_url);
-      }
     }
   }, [profile]);
-
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // Preview
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setAvatarPreview(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-
-    // Upload
-    setSaving(true);
-    const url = await uploadAvatar(file);
-    if (url) {
-      setAvatarPreview(url);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }
-    setSaving(false);
-  };
 
   const handleSaveProfile = async () => {
     setSaving(true);

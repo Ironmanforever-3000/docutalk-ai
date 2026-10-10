@@ -84,62 +84,16 @@ function chunkText(text: string): string[] {
 
 // ── Embedding ──────────────────────────────────────────────────────────────────
 
-const VOYAGE_BATCH_MAX_TOKENS = 2500;
 const VOYAGE_MIN_INTERVAL_MS = 20_000;
 const VOYAGE_BATCH_SIZE = 4;
 
-function tokenEstimate(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
-function chunkBatches(chunks: string[]): string[][] {
-  const batches: string[][] = [];
-  let current: string[] = [];
-  let currentTokens = 0;
-  for (const c of chunks) {
-    const tokens = tokenEstimate(c);
-    if (current.length > 0 && currentTokens + tokens > VOYAGE_BATCH_MAX_TOKENS) {
-      batches.push(current);
-      current = [];
-      currentTokens = 0;
-    }
-    current.push(c);
-    currentTokens += tokens;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ── Management API helper ─────────────────────────────────────────────────────
-// Used to fetch large vector payloads because PostgREST is slow.
-const MGMT_PROJECT_REF = "etlbgdqbpyhqwlkxcdqc";
 
-async function mgmtQuery<T = unknown>(sql: string): Promise<T> {
-  const token = Deno.env.get("MGMT_API_TOKEN");
-  if (!token) {
-    throw new Error("MGMT_API_TOKEN secret not set");
-  }
-  const res = await fetch(
-    `https://api.supabase.com/v1/projects/${MGMT_PROJECT_REF}/database/query`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query: sql }),
-    }
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Management API query failed (${res.status}): ${body.slice(0, 300)}`);
-  }
-  return (await res.json()) as T;
-}
 
 // ── Self-chaining ──────────────────────────────────────────────────────────────
 
@@ -154,7 +108,7 @@ async function spawnNextInvocation(documentId: string, userId: string) {
         Authorization: `Bearer ${svcKey}`,
         apikey: svcKey,
       },
-      body: JSON.stringify({ document_id: documentId, admin_mode: true, user_id: userId }),
+      body: JSON.stringify({ document_id: documentId, user_id: userId, is_chain: true }),
     });
   } catch (err) {
     console.error("Failed to spawn next process-document invocation:", err);
@@ -169,24 +123,26 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { document_id, admin_mode, user_id } = await req.json();
+    const { document_id, user_id, is_chain } = await req.json();
 
     let supabase;
     let currentUserId: string;
     let serviceRoleClient;
 
+    const authHeader = req.headers.get("Authorization");
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-    if (admin_mode && serviceRoleKey) {
+    const isAdmin = authHeader === `Bearer ${serviceRoleKey}`;
+
+    if (isAdmin) {
       supabase = createClient(supabaseUrl, serviceRoleKey);
       serviceRoleClient = supabase;
       if (!user_id) {
-        return jsonResponse({ error: "user_id is required in admin_mode" }, 400);
+        return jsonResponse({ error: "user_id is required for service role calls" }, 400);
       }
       currentUserId = user_id;
     } else {
-      const authHeader = req.headers.get("Authorization");
       if (!authHeader) {
         return jsonResponse({ error: "Missing Authorization header" }, 401);
       }
@@ -232,6 +188,14 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "No text content in document" }, 400);
     }
 
+    if (!is_chain) {
+      // Clean slate for new vectorization or reprocess
+      await supabase
+        .from("document_chunks")
+        .delete()
+        .eq("document_id", document_id);
+    }
+
     await supabase
       .from("documents")
       .update({ status: "processing" })
@@ -256,23 +220,14 @@ Deno.serve(async (req: Request) => {
 
     const processed = count || 0;
 
-    if (processed === 0) {
-      await supabase
-        .from("document_chunks")
-        .delete()
-        .eq("document_id", document_id);
-    }
-
     if (processed >= totalChunks) {
-      // Fetch embeddings through the Management API
-      const rows = await mgmtQuery<
-        Array<{ id: string; chunk_index: number; emb: string }>
-      >(
-        `select id, chunk_index, embedding::text as emb from document_chunks where document_id = '${document_id}' order by chunk_index;`
-      );
+      // Fetch embeddings through the RPC
+      const { data: rows, error: rpcError } = await serviceRoleClient.rpc("get_document_embeddings", {
+        p_doc: document_id
+      });
 
-      if (!rows || rows.length === 0) {
-        return jsonResponse({ error: "No chunks to finalize" }, 500);
+      if (rpcError || !rows || rows.length === 0) {
+        return jsonResponse({ error: "No chunks to finalize or RPC failed" }, 500);
       }
 
       const ordered = rows.sort((a, b) => a.chunk_index - b.chunk_index);
@@ -344,7 +299,11 @@ Deno.serve(async (req: Request) => {
     const done = processed + batch.length;
     console.log(`[Embedding] Stored ${chunkRows.length} chunks in document_chunks table (total: ${done}/${chunks.length})`);
 
-    spawnNextInvocation(document_id, currentUserId);
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+      EdgeRuntime.waitUntil(spawnNextInvocation(document_id, currentUserId));
+    } else {
+      spawnNextInvocation(document_id, currentUserId);
+    }
 
     return jsonResponse({
       success: true,

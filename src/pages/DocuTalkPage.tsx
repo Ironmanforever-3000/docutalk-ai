@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Send, Bot, User, Trash2, Copy, Check, FileText, Settings, AlertCircle, Paperclip, X, Loader2, Mail, ExternalLink, Download, Inbox, Zap, Database, MessageSquarePlus } from 'lucide-react';
+import { Send, Bot, User, Trash2, Copy, Check, FileText, Settings, AlertCircle, Paperclip, X, Loader2, Download, Zap, Database, MessageSquarePlus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useUserProfile } from '../contexts/UserProfileContext';
 import { supabase, ragChat, generalChat, syncDataSource } from '../lib/supabase';
 import { Document, ChatMessage, DataSource, Source } from '../types';
 import { extractTextFromFile } from '../lib/extraction';
@@ -11,11 +10,9 @@ import { useDocumentChunkMap } from '../hooks/useDocumentChunkMap';
 
 export default function DocuTalkPage() {
   const { user } = useAuth();
-  const { profile } = useUserProfile();
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const projectParam = searchParams.get('project');
   const docsParam = searchParams.get('docs');
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);

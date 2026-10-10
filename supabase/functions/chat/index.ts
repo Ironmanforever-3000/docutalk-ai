@@ -81,6 +81,7 @@ Be helpful, accurate, and concise. If you cannot find relevant information in th
     if (!responseText && (provider === "anthropic" || !responseText) && (apiKey || Deno.env.get("ANTHROPIC_API_KEY"))) {
       try {
         const anthropicKey = apiKey || Deno.env.get("ANTHROPIC_API_KEY") || "";
+        const anthropicModel = Deno.env.get("ANTHROPIC_MODEL") || "claude-3-5-sonnet-20241022";
         const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -90,10 +91,10 @@ Be helpful, accurate, and concise. If you cannot find relevant information in th
             "anthropic-dangerous-direct-browser-access": "true",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: anthropicModel,
             max_tokens: 2048,
             system: systemPrompt,
-            messages: messages.filter((m: ChatMessage) => m.role !== "system"),
+            messages: messages.filter((m: ChatMessage) => m.role !== "system").slice(-20),
           }),
         });
 

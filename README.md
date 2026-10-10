@@ -9,9 +9,8 @@ This file explains environment variables and secret handling for local developme
 2) Required variables
 - `VITE_SUPABASE_URL` — your Supabase project URL (https://<id>.supabase.co)
 - `VITE_SUPABASE_ANON_KEY` — Supabase anon/public key for client usage
-- `VITE_OPENAI_API_KEY` — OpenAI API key (embeddings + optional generation)
-- `VITE_GROQ_API_KEY` — Groq API key (if using Groq provider)
-- `VITE_ANTHROPIC_API_KEY` — Anthropic key (optional)
+
+*(LLM provider keys like OpenAI, Anthropic, or Groq are configured inside Supabase Vault as secrets or entered by the user in the app Settings, not as VITE environment variables)*
 
 3) Rotate & revoke exposed keys
 - If a key was ever committed or shared, rotate/revoke it from the provider dashboard immediately.

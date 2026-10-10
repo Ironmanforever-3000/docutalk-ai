@@ -46,11 +46,9 @@ function jsonResponse(body: unknown, status = 200) {
 async function callLLM(
   messages: Array<{ role: string; content: string }>,
   apiKey: string,
-  provider: string
+  provider: string,
+  systemPrompt: string
 ): Promise<string> {
-  const system =
-    "You are DocuTalk AI, a document-grounded assistant. Answer using ONLY the context provided. If the answer isn't in the context, say so. Cite the source document and chunk index for each piece of information you use.";
-
   if (provider === "anthropic") {
     const key = apiKey || Deno.env.get("ANTHROPIC_API_KEY") || "";
     if (!key) throw new Error("No API key for Anthropic");
@@ -67,7 +65,7 @@ async function callLLM(
       body: JSON.stringify({
         model,
         max_tokens: 4096,
-        system,
+        system: systemPrompt,
         messages: messages.slice(-20),
       }),
     });
@@ -93,7 +91,7 @@ async function callLLM(
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "system", content: system }, ...messages.slice(-20)],
+        messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-20)],
         max_tokens: 4096,
         temperature: 0.3,
       }),
@@ -128,7 +126,7 @@ async function callLLM(
           },
           body: JSON.stringify({
             model,
-            messages: [{ role: "system", content: system }, ...messages.slice(-20)],
+            messages: [{ role: "system", content: systemPrompt }, ...messages.slice(-20)],
             max_tokens: 4096,
             temperature: 0.3,
           }),
@@ -340,7 +338,7 @@ ${contextBlock}`
         : `You are DocuTalk AI, an intelligent document assistant. Answer the user's question to the best of your ability. If no document context is available, let them know and offer suggestions (upload files, paste text, etc.).`,
     };
 
-    const llmMessages = [systemMessage, ...history, { role: "user" as const, content: message }];
+    const llmMessages = [...history, { role: "user" as const, content: message }];
 
     console.log(`[RAG-Chat] Prompt Construction:`);
     console.log(`  System message length: ${systemMessage.content.length} chars`);
@@ -348,7 +346,7 @@ ${contextBlock}`
     console.log(`  History messages: ${history.length}`);
     console.log(`[RAG-Chat] Calling ${provider} LLM...`);
 
-    const response = await callLLM(llmMessages, apiKey, provider);
+    const response = await callLLM(llmMessages, apiKey, provider, systemMessage.content);
 
     return jsonResponse({
       response,

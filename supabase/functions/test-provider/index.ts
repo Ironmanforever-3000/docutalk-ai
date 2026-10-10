@@ -49,7 +49,7 @@ Deno.serve(async (req: Request) => {
           messages: [{ role: 'user', content: 'ping' }],
         };
         break;
-      case 'groq':
+      case 'groq': {
         endpoint = 'https://api.groq.com/openai/v1/chat/completions';
         headers = {
           Authorization: `Bearer ${apiKey}`,
@@ -65,6 +65,7 @@ Deno.serve(async (req: Request) => {
           max_tokens: 10,
         };
         break;
+      }
       case 'openai':
         endpoint = 'https://api.openai.com/v1/chat/completions';
         headers = {
