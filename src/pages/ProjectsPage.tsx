@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { FolderKanban, Plus, Search, MoreVertical, Trash2, Edit, X, Check, Calendar, FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { Project } from '../types';
@@ -30,7 +31,7 @@ export default function ProjectsPage() {
     try {
       const { data, error } = await supabase
         .from('projects')
-        .select('*')
+        .select('*, documents(count)')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
@@ -228,9 +229,10 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredProjects.map((project) => (
-            <div
+            <Link
+              to={`/app/projects/${project.id}`}
               key={project.id}
-              className="bg-ink-800 rounded-xl p-6 border border-ink-700 hover:border-ink-700 transition-colors group relative"
+              className="bg-ink-800 rounded-xl p-6 border border-ink-700 hover:border-ember-500/50 transition-colors group relative block"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="w-12 h-12 bg-gradient-to-br from-ember-500 to-ember-700 rounded-lg flex items-center justify-center">
@@ -238,7 +240,11 @@ export default function ProjectsPage() {
                 </div>
                 <div className="relative">
                   <button
-                    onClick={() => setActiveMenu(activeMenu === project.id ? null : project.id)}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setActiveMenu(activeMenu === project.id ? null : project.id);
+                    }}
                     className="p-1 text-ash hover:text-parchment opacity-0 group-hover:opacity-100 transition-all"
                   >
                     <MoreVertical className="w-5 h-5" />
@@ -248,18 +254,30 @@ export default function ProjectsPage() {
                     <>
                       <div
                         className="fixed inset-0 z-40"
-                        onClick={() => setActiveMenu(null)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setActiveMenu(null);
+                        }}
                       />
                       <div className="absolute right-0 mt-2 w-40 bg-ink-800 rounded-lg border border-ink-700 shadow-xl z-50 overflow-hidden">
                         <button
-                          onClick={() => openEditModal(project)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openEditModal(project);
+                          }}
                           className="w-full flex items-center gap-2 px-4 py-3 text-parchment-300 hover:bg-ink-700 transition-colors"
                         >
                           <Edit className="w-4 h-4" />
                           Edit
                         </button>
                         <button
-                          onClick={() => handleDeleteProject(project)}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleDeleteProject(project);
+                          }}
                           className="w-full flex items-center gap-2 px-4 py-3 text-red-400 hover:bg-ink-700 transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -278,17 +296,17 @@ export default function ProjectsPage() {
                 </p>
               )}
 
-              <div className="flex items-center gap-4 pt-4 border-t border-ink-700">
+              <div className="flex items-center gap-4 pt-4 border-t border-ink-700 mt-auto">
                 <div className="flex items-center gap-1 text-xs text-ash/60">
                   <Calendar className="w-3 h-3" />
                   {new Date(project.created_at).toLocaleDateString()}
                 </div>
                 <div className="flex items-center gap-1 text-xs text-ash/60">
                   <FileText className="w-3 h-3" />
-                  0 docs
+                  {project.documents?.[0]?.count || 0} doc{project.documents?.[0]?.count !== 1 ? 's' : ''}
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

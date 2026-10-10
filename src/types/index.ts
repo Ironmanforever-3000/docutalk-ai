@@ -67,6 +67,7 @@ export interface Project {
   description?: string;
   created_at: string;
   user_id: string;
+  documents?: { count: number }[];
 }
 
 export interface DataSource {

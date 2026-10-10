@@ -10,6 +10,7 @@ import Header from './components/Header';
 import LandingPage from './pages/LandingPage';
 import HomePage from './pages/HomePage';
 import ProjectsPage from './pages/ProjectsPage';
+import ProjectPage from './pages/ProjectPage';
 import DataSourcesPage from './pages/DataSourcesPage';
 import FilesPage from './pages/FilesPage';
 import DocuTalkPage from './pages/DocuTalkPage';
@@ -58,7 +59,8 @@ function AppContent() {
           <Route path="files" element={<FilesPage />} />
           <Route path="chat" element={<DocuTalkPage />} />
           <Route path="chat/:sessionId" element={<DocuTalkPage />} />
-          <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:projectId" element={<ProjectPage />} />
           <Route path="data-sources" element={<DataSourcesPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

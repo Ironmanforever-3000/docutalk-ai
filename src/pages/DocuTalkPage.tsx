@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Bot, User, Trash2, Copy, Check, FileText, Settings, AlertCircle, Paperclip, X, Loader2, Mail, ExternalLink, Download, Inbox, Zap, Database } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Send, Bot, User, Trash2, Copy, Check, FileText, Settings, AlertCircle, Paperclip, X, Loader2, Mail, ExternalLink, Download, Inbox, Zap, Database, MessageSquarePlus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserProfile } from '../contexts/UserProfileContext';
 import { supabase, ragChat, generalChat, syncDataSource } from '../lib/supabase';
@@ -11,6 +12,11 @@ import { useDocumentChunkMap } from '../hooks/useDocumentChunkMap';
 export default function DocuTalkPage() {
   const { user } = useAuth();
   const { profile } = useUserProfile();
+  const { sessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const projectParam = searchParams.get('project');
+  const docsParam = searchParams.get('docs');
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   
@@ -25,8 +31,7 @@ export default function DocuTalkPage() {
     emailEnabled: boolean;
   } | null>(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
-  const [, setSessions] = useState<Array<{ id: string; title: string; created_at: string }>>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string; created_at: string }>>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [isSyncingSources, setIsSyncingSources] = useState(false);
@@ -84,11 +89,11 @@ export default function DocuTalkPage() {
   }, [user]);
 
   useEffect(() => {
-    if (currentSessionId) {
-      loadMessages(currentSessionId);
+    if (sessionId) {
+      loadMessages(sessionId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSessionId]);
+  }, [sessionId]);
 
   /**
    * Loads API key from localStorage first, then falls back to the correct
@@ -161,7 +166,7 @@ export default function DocuTalkPage() {
 
       if (data && data.length > 0) {
         setSessions(data);
-        setCurrentSessionId(data[0].id);
+        if (!sessionId) navigate(`/app/chat/${data[0].id}`, { replace: true });
       } else {
         const { data: newSession, error: createError } = await supabase
           .from('chat_sessions')
@@ -172,7 +177,7 @@ export default function DocuTalkPage() {
         if (createError) throw createError;
         if (newSession) {
           setSessions([newSession]);
-          setCurrentSessionId(newSession.id);
+          if (!sessionId) navigate(`/app/chat/${newSession.id}`, { replace: true });
         }
       }
     } catch (err) {
@@ -215,7 +220,12 @@ export default function DocuTalkPage() {
       }
 
       const docs = (data as Document[]) || [];
-      setSelectedDocIds(new Set(docs.map(d => d.id)));
+      if (docsParam) {
+        const allowedIds = new Set(docsParam.split(','));
+        setSelectedDocIds(new Set(docs.filter(d => allowedIds.has(d.id)).map(d => d.id)));
+      } else {
+        setSelectedDocIds(new Set(docs.map(d => d.id)));
+      }
       return docs;
     } catch (err) {
       console.error('Error loading documents:', err);
@@ -541,7 +551,7 @@ export default function DocuTalkPage() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || loading || !user || !currentSessionId) return;
+    if (!input.trim() || loading || !user || !sessionId) return;
 
     const userMessage = input.trim();
     setInput('');
@@ -552,7 +562,7 @@ export default function DocuTalkPage() {
         .from('chat_messages')
         .insert({
           user_id: user.id,
-          session_id: currentSessionId,
+          session_id: sessionId,
           role: 'user',
           content: userMessage,
         })
@@ -609,7 +619,7 @@ export default function DocuTalkPage() {
         .from('chat_messages')
         .insert({
           user_id: user.id,
-          session_id: currentSessionId,
+          session_id: sessionId,
           role: 'assistant',
           content: responseText,
         })
@@ -647,17 +657,63 @@ export default function DocuTalkPage() {
   };
 
   const clearChat = async () => {
-    if (!user || !currentSessionId || !confirm('Clear this chat session?')) return;
+    if (!user || !sessionId || !confirm('Clear this chat session?')) return;
     try {
-      await supabase.from('chat_messages').delete().eq('session_id', currentSessionId);
+      await supabase.from('chat_messages').delete().eq('session_id', sessionId);
       setMessages([]);
     } catch (err) {
       console.error('Error clearing chat:', err);
     }
   };
 
+  const createNewSession = async () => {
+    if (!user) return;
+    try {
+      const { data: newSession, error: createError } = await supabase
+        .from('chat_sessions')
+        .insert({ user_id: user.id, title: 'New Chat' })
+        .select()
+        .single();
+
+      if (createError) throw createError;
+      if (newSession) {
+        setSessions([newSession, ...sessions]);
+        navigate(`/app/chat/${newSession.id}`);
+      }
+    } catch (err) {
+      console.error('Error creating new session:', err);
+    }
+  };
+
   return (
-    <div className="relative h-[calc(100vh-8rem)] flex flex-col bg-ink-900 overflow-hidden">
+    <div className="relative h-[calc(100vh-8rem)] flex bg-ink-900 overflow-hidden">
+      {/* Sessions Rail */}
+      <div className="w-64 border-r border-ink-700 bg-ink-800 flex flex-col z-10 shrink-0">
+        <div className="p-4 border-b border-ink-700">
+          <button
+            onClick={createNewSession}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-ember-600 hover:bg-ember-700 text-parchment rounded-lg transition-colors"
+          >
+            <MessageSquarePlus className="w-4 h-4" />
+            New Chat
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {sessions.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => navigate(`/app/chat/${s.id}`)}
+              className={`block w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors ${
+                s.id === sessionId ? 'bg-ink-700 text-parchment' : 'text-ash hover:bg-ink-700/50 hover:text-parchment'
+              }`}
+            >
+              {s.title}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 flex flex-col relative overflow-hidden">
       <div className="grid-bg grid-bg-fade pointer-events-none absolute inset-0 -z-10" />
       {/* Header */}
       <div className="flex items-center justify-between p-6 border-b border-ink-700 bg-ink-800">
@@ -1310,6 +1366,7 @@ export default function DocuTalkPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

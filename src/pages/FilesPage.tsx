@@ -21,6 +21,8 @@ export default function FilesPage() {
   const [reprocessing, setReprocessing] = useState<string | null>(null);
   const [vectorizing, setVectorizing] = useState<string | null>(null);
   const [vectorizingAll, setVectorizingAll] = useState(false);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -32,14 +34,25 @@ export default function FilesPage() {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('documents')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+      const [filesRes, projectsRes] = await Promise.all([
+        supabase
+          .from('documents')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('projects')
+          .select('id, name')
+          .eq('user_id', user.id)
+          .order('name', { ascending: true })
+      ]);
 
-      if (error) throw error;
-      setFiles(data || []);
+      if (filesRes.error) throw filesRes.error;
+      setFiles(filesRes.data || []);
+      
+      if (projectsRes.data) {
+        setProjects(projectsRes.data);
+      }
     } catch (err) {
       console.error('Error loading files:', err);
     } finally {
@@ -114,10 +127,11 @@ export default function FilesPage() {
             file_type: file.type || 'application/octet-stream',
             storage_path: uploadData?.path,
             user_id: user.id,
+            project_id: selectedProjectId || null,
             status: extractionResult.status,
             extracted_text: extractionResult.text,
             char_count: extractionResult.charCount,
-             error_message: extractionResult.errorMessage,
+            error_message: extractionResult.errorMessage,
             content_text: extractionResult.text,
             processed: extractionResult.status === 'ready',
           })
@@ -557,6 +571,26 @@ export default function FilesPage() {
                 <X className="w-6 h-6" />
               </button>
             </div>
+
+            {projects.length > 0 && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-parchment-300 mb-1">
+                  Assign to Project (Optional)
+                </label>
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  className="w-full px-4 py-2 bg-ink-900 border border-ink-700 rounded-lg text-parchment focus:outline-none focus:border-ember-500 transition-colors"
+                >
+                  <option value="">No Project</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div
               className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
